@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Customize NProgress bar */
+#nprogress .bar {
+    background: #ff6347; /* Change the bar color to tomato */
+    height: 4px; /* Make it thicker */
+  }
+
+  /* Ensure images are responsive */
+img {
+    max-width: 100%;
+    height: auto;
+  }
