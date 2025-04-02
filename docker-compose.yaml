@@ -1,0 +1,19 @@
+version: '3'
+services:
+  db:
+    image: mysql:5.7
+    environment:
+      MYSQL_DATABASE: scans_db
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: f1233211
+      MYSQL_ROOT_PASSWORD: rootpassword
+    volumes:
+      - db_data:/var/lib/mysql
+  app:
+    build: .
+    ports:
+      - "3002:3030"
+    depends_on:
+      - db
+volumes:
+  db_data:

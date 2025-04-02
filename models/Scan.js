@@ -3,28 +3,70 @@ const mysql = require('mysql2/promise');
 const PQueue = require('p-queue').default;
 
 const dbConfig = {
-  host: 'localhost',
-  user: 'root',
-  password: '',
+  host: 'db',
+  user: 'admin',
+  password: 'f1233211',
   database: 'scans_db',
 };
 
 let db;
-const queue = new PQueue({ concurrency: 2 }); // Reduced concurrency to 2 per worker
-const EXPIRATION_SECONDS = 7200; // 2 hours
+const queue = new PQueue({ concurrency: 2 });
+const EXPIRATION_SECONDS = 7200;
 
 class Scan {
   static async initialize() {
-    db = await mysql.createConnection(dbConfig);
-    console.log('Connected to MySQL database in Scan model');
-    await db.execute(`CREATE TABLE IF NOT EXISTS scans (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      url VARCHAR(255) UNIQUE,
-      status VARCHAR(50),
-      result JSON,
-      timestamp BIGINT,
-      expires_at BIGINT
-    )`);
+    const maxRetries = 10;
+    const retryDelay = 2000;
+
+    // Base config without database to check/create it
+    const baseConfig = {
+      host: 'db',
+      user: 'admin',
+      password: 'f1233211',
+    };
+
+    // Step 1: Ensure the database exists
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      let baseConnection;
+      try {
+        baseConnection = await mysql.createConnection(baseConfig);
+        console.log('Connected to MySQL server');
+        await baseConnection.execute(`CREATE DATABASE IF NOT EXISTS scans_db`);
+        console.log('Database scans_db ensured');
+        break;
+      } catch (error) {
+        console.error(`Database check attempt ${attempt} failed:`, error.message);
+        if (attempt === maxRetries) {
+          throw new Error('Failed to connect to MySQL server after maximum retries');
+        }
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      } finally {
+        if (baseConnection) await baseConnection.end();
+      }
+    }
+
+    // Step 2: Connect to scans_db and create the table
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        db = await mysql.createConnection(dbConfig);
+        console.log('Connected to MySQL database in Scan model');
+        await db.execute(`CREATE TABLE IF NOT EXISTS scans (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          url VARCHAR(255) UNIQUE,
+          status VARCHAR(50),
+          result JSON,
+          timestamp BIGINT,
+          expires_at BIGINT
+        )`);
+        return;
+      } catch (error) {
+        console.error(`Connection attempt ${attempt} failed:`, error.message);
+        if (attempt === maxRetries) {
+          throw new Error('Failed to connect to scans_db after maximum retries');
+        }
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      }
+    }
   }
 
   static async getCachedResult(url) {
@@ -37,7 +79,8 @@ class Scan {
       const now = Date.now();
       if (now < expires_at) {
         console.log(`Returning cached result for ${url} (expires at ${new Date(expires_at)})`);
-        return JSON.parse(result);
+        console.log('Raw result from DB:', result); // Debug log
+        return result; // No JSON.parse needed, it's already an object
       }
       console.log(`Cached result for ${url} expired at ${new Date(expires_at)}`);
     }
@@ -47,11 +90,39 @@ class Scan {
   static async saveResult(url, status, result) {
     const timestamp = Date.now();
     const expires_at = timestamp + EXPIRATION_SECONDS * 1000;
+    const resultString = JSON.stringify(result); // Ensure it’s a string for storage
+    console.log('Saving result for', url, 'with data:', resultString); // Debug log
     await db.execute(
       'INSERT INTO scans (url, status, result, timestamp, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = ?, result = ?, timestamp = ?, expires_at = ?',
-      [url, status, JSON.stringify(result), timestamp, expires_at, status, JSON.stringify(result), timestamp, expires_at]
+      [url, status, resultString, timestamp, expires_at, status, resultString, timestamp, expires_at]
     );
     console.log(`Saved result for ${url} with expiration at ${new Date(expires_at)}`);
+  }
+
+  static async scanUrl(url) {
+    const cachedResult = await this.getCachedResult(url);
+    if (cachedResult) return cachedResult;
+
+    const report = await queue.add(() => this.performScan(url));
+    const errorsAndAlerts = this.processLighthouseReport(report);
+    const performanceMetrics = this.extractPerformanceMetrics(report);
+
+    const scanResult = {
+      status: 'completed',
+      url: report.finalUrl || url,
+      originalUrl: url,
+      results: {
+        errors: errorsAndAlerts.filter(item => item.type === 'error'),
+        alerts: errorsAndAlerts.filter(item => item.type === 'alert'),
+        totalErrors: errorsAndAlerts.filter(item => item.type === 'error').length,
+        totalAlerts: errorsAndAlerts.filter(item => item.type === 'alert').length,
+        performance: performanceMetrics,
+      },
+      timestamp: Date.now(),
+    };
+
+    await this.saveResult(url, 'completed', scanResult);
+    return scanResult;
   }
 
   static async performScan(url) {
@@ -94,32 +165,7 @@ class Scan {
       if (browser) await browser.close().catch(err => console.error('Browser close error:', err));
     }
   }
-
-  static async scanUrl(url) {
-    const cachedResult = await this.getCachedResult(url);
-    if (cachedResult) return cachedResult;
-
-    const report = await queue.add(() => this.performScan(url));
-    const errorsAndAlerts = this.processLighthouseReport(report);
-    const performanceMetrics = this.extractPerformanceMetrics(report);
-
-    const scanResult = {
-      status: 'completed',
-      url: report.finalUrl || url,
-      originalUrl: url,
-      results: {
-        errors: errorsAndAlerts.filter(item => item.type === 'error'),
-        alerts: errorsAndAlerts.filter(item => item.type === 'alert'),
-        totalErrors: errorsAndAlerts.filter(item => item.type === 'error').length,
-        totalAlerts: errorsAndAlerts.filter(item => item.type === 'alert').length,
-        performance: performanceMetrics,
-      },
-      timestamp: Date.now(),
-    };
-
-    await this.saveResult(url, 'completed', scanResult);
-    return scanResult;
-  }
+  
 
   static processLighthouseReport(report) {
     const issues = [];
