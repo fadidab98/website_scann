@@ -2,6 +2,7 @@ FROM node:20
 WORKDIR /app
 COPY package*.json ./
 RUN npm install
+RUN npm install puppeteer@24.5.0 --force  # Force reinstall
 COPY . .
 RUN apt-get update && apt-get install -y \
     gconf-service libasound2 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 \

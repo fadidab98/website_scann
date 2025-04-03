@@ -1,6 +1,6 @@
-const puppeteer = require('puppeteer');
 const mysql = require('mysql2/promise');
 const PQueue = require('p-queue').default;
+const puppeteer = require('puppeteer');
 
 const dbConfig = {
   host: 'db',
@@ -94,11 +94,11 @@ class Scan {
   static async scanUrl(url) {
     const cachedResult = await this.getCachedResult(url);
     if (cachedResult) return cachedResult;
-
-    const report = await queue.add(() => this.performScan(url));
+  
+    const report = await this.performScan(url); // Direct call instead of queue.add
     const errorsAndAlerts = this.processLighthouseReport(report);
     const performanceMetrics = this.extractPerformanceMetrics(report);
-
+  
     const scanResult = {
       status: 'completed',
       url: report.finalUrl || url,
@@ -112,7 +112,7 @@ class Scan {
       },
       timestamp: Date.now(),
     };
-
+  
     await this.saveResult(url, 'completed', scanResult);
     return scanResult;
   }
@@ -121,6 +121,9 @@ class Scan {
     let browser;
     let page;
     try {
+      console.log(`DEBUG: Running performScan version 2025-04-03 with waitForTimeout`);
+      console.log(`Puppeteer version: ${puppeteer.version || 'undefined'}`);
+      console.log(`Puppeteer launch available: ${typeof puppeteer.launch === 'function'}`);
       console.log(`Starting Puppeteer for ${url}`);
       browser = await puppeteer.launch({
         headless: true,
@@ -131,6 +134,7 @@ class Scan {
 
       page = await browser.newPage();
       console.log(`Page created for ${url}`);
+      console.log(`Page has waitForTimeout: ${typeof page.waitForTimeout === 'function'}`);
 
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
       console.log(`Navigating to ${url}`);
@@ -142,8 +146,9 @@ class Scan {
       const currentUrl = await page.url();
       console.log(`Current URL after navigation: ${currentUrl}`);
 
-      // Ensure page is stable before Lighthouse
-      await page.waitForTimeout(2000);
+      // Temporary workaround: Use Promise delay instead of waitForTimeout
+      console.log('Waiting 2 seconds');
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
       const { default: lighthouse } = await import('lighthouse');
       console.log('Lighthouse imported');
@@ -155,7 +160,7 @@ class Scan {
         onlyCategories: ['performance'],
         settings: {
           maxWaitForLoad: 60000,
-          throttlingMethod: 'provided', // Use Puppeteer’s throttling
+          throttlingMethod: 'provided',
         },
       });
 
@@ -168,7 +173,6 @@ class Scan {
       console.error(`Scan error for ${url}:`, error.message);
       throw error;
     } finally {
-      // Close resources only after ensuring no operations are pending
       if (page) {
         try {
           await page.close();
@@ -187,7 +191,6 @@ class Scan {
       }
     }
   }
-
   static processLighthouseReport(report) {
     const issues = [];
     const descriptions = {
