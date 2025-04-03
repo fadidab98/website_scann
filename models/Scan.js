@@ -95,7 +95,7 @@ class Scan {
    /*  const cachedResult = await this.getCachedResult(url);
     if (cachedResult) return cachedResult; */
   
-    const report = await this.performScan(url); // Direct call instead of queue.add
+    const report = await this.performScan(url); // Direct call nstead of queue.add
     const errorsAndAlerts = this.processLighthouseReport(report);
     const performanceMetrics = this.extractPerformanceMetrics(report);
   
