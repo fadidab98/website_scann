@@ -16,7 +16,7 @@ const allowedOrigins = [
 // Configure CORS to allow only specific origins
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (e.g., curl, Postman) or if origin is in allowed list
+    // Allow requests with no origin (e.g., curl, Postman) or iforigin is in allowed list
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
