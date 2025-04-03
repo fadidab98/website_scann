@@ -18,14 +18,12 @@ class Scan {
     const maxRetries = 10;
     const retryDelay = 2000;
 
-    // Base config without database to check/create it
     const baseConfig = {
       host: 'db',
       user: 'admin',
       password: 'f1233211',
     };
 
-    // Step 1: Ensure the database exists
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       let baseConnection;
       try {
@@ -36,16 +34,13 @@ class Scan {
         break;
       } catch (error) {
         console.error(`Database check attempt ${attempt} failed:`, error.message);
-        if (attempt === maxRetries) {
-          throw new Error('Failed to connect to MySQL server after maximum retries');
-        }
+        if (attempt === maxRetries) throw new Error('Failed to connect to MySQL server after maximum retries');
         await new Promise(resolve => setTimeout(resolve, retryDelay));
       } finally {
         if (baseConnection) await baseConnection.end();
       }
     }
 
-    // Step 2: Connect to scans_db and create the table
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         db = await mysql.createConnection(dbConfig);
@@ -61,9 +56,7 @@ class Scan {
         return;
       } catch (error) {
         console.error(`Connection attempt ${attempt} failed:`, error.message);
-        if (attempt === maxRetries) {
-          throw new Error('Failed to connect to scans_db after maximum retries');
-        }
+        if (attempt === maxRetries) throw new Error('Failed to connect to scans_db after maximum retries');
         await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
     }
@@ -79,8 +72,7 @@ class Scan {
       const now = Date.now();
       if (now < expires_at) {
         console.log(`Returning cached result for ${url} (expires at ${new Date(expires_at)})`);
-        console.log('Raw result from DB:', result); // Debug log
-        return result; // No JSON.parse needed, it's already an object
+        return result;
       }
       console.log(`Cached result for ${url} expired at ${new Date(expires_at)}`);
     }
@@ -90,8 +82,8 @@ class Scan {
   static async saveResult(url, status, result) {
     const timestamp = Date.now();
     const expires_at = timestamp + EXPIRATION_SECONDS * 1000;
-    const resultString = JSON.stringify(result); // Ensure it’s a string for storage
-    console.log('Saving result for', url, 'with data:', resultString); // Debug log
+    const resultString = JSON.stringify(result);
+    console.log('Saving result for', url, 'with data:', resultString);
     await db.execute(
       'INSERT INTO scans (url, status, result, timestamp, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = ?, result = ?, timestamp = ?, expires_at = ?',
       [url, status, resultString, timestamp, expires_at, status, resultString, timestamp, expires_at]
@@ -129,18 +121,30 @@ class Scan {
     let browser;
     let page;
     try {
+      console.log(`Starting Puppeteer for ${url}`);
       browser = await puppeteer.launch({
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
         timeout: 60000,
       });
+      console.log(`Browser launched for ${url}: ${browser.wsEndpoint()}`);
+
       page = await browser.newPage();
+      console.log(`Page created for ${url}`);
 
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
       console.log(`Navigating to ${url}`);
-      await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+      const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+      if (!response.ok()) {
+        throw new Error(`Navigation failed with status ${response.status()}`);
+      }
 
       const currentUrl = await page.url();
+      console.log(`Current URL after navigation: ${currentUrl}`);
+
+      // Ensure page is stable before Lighthouse
+      await page.waitForTimeout(2000);
+
       const { default: lighthouse } = await import('lighthouse');
       console.log('Lighthouse imported');
 
@@ -148,24 +152,41 @@ class Scan {
         port: new URL(browser.wsEndpoint()).port,
         output: 'json',
         logLevel: 'info',
+        onlyCategories: ['performance'],
         settings: {
           maxWaitForLoad: 60000,
-          throttlingMethod: 'simulate',
+          throttlingMethod: 'provided', // Use Puppeteer’s throttling
         },
       });
 
+      console.log('Lighthouse scan completed');
       const report = runnerResult.lhr;
       console.log('Lighthouse audits:', Object.keys(report.audits));
+
       return report;
     } catch (error) {
-      console.error(`Scan error for ${url}:`, error);
+      console.error(`Scan error for ${url}:`, error.message);
       throw error;
     } finally {
-      if (page) await page.close().catch(err => console.error('Page close error:', err));
-      if (browser) await browser.close().catch(err => console.error('Browser close error:', err));
+      // Close resources only after ensuring no operations are pending
+      if (page) {
+        try {
+          await page.close();
+          console.log(`Page closed for ${url}`);
+        } catch (err) {
+          console.error(`Page close error for ${url}:`, err.message);
+        }
+      }
+      if (browser) {
+        try {
+          await browser.close();
+          console.log(`Browser closed for ${url}`);
+        } catch (err) {
+          console.error(`Browser close error for ${url}:`, err.message);
+        }
+      }
     }
   }
-  
 
   static processLighthouseReport(report) {
     const issues = [];

@@ -7,7 +7,25 @@ const ScanController = require('./controllers/ScanController');
 
 const app = express();
 
-app.use(cors());
+// Define allowed origins
+const allowedOrigins = [
+  'http://localhost:3000', // Adjust port if your frontend runs on a different one
+  'https://fadilogic.serp24.online/' 
+];
+
+// Configure CORS to allow only specific origins
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g., curl, Postman) or if origin is in allowed list
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST'], // Restrict to allowed methods
+  allowedHeaders: ['Content-Type'], // Restrict to allowed headers
+}));
 app.use(express.json());
 
 const numCPUs = os.cpus().length;
