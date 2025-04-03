@@ -10,7 +10,7 @@ const app = express();
 // Define allowed origins
 const allowedOrigins = [
   'http://localhost:3000', // Adjust port if your frontend runs on a different one
-  'https://fadilogic.serp24.online' 
+  'https://fadilogic.serp24.online/' 
 ];
 
 // Configure CORS to allow only specific origins
