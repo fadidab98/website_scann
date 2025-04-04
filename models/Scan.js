@@ -10,7 +10,7 @@ const dbConfig = {
 };
 const queue = new PQueue({ concurrency: 2 }); // Allows 2 scans at once
 let db;
-const EXPIRATION_SECONDS = 172800; // 48 hours
+const EXPIRATION_SECONDS = 120; // 48 hours
 
 class Scan {
   static async initialize() {
@@ -64,8 +64,8 @@ class Scan {
   }
 
   static async scanUrl(url) {
-    const cachedResult = await this.getCachedResult(url);
-    if (cachedResult) return cachedResult;
+/*     const cachedResult = await this.getCachedResult(url);
+    if (cachedResult) return cachedResult; */
 
     const report = await queue.add(() => this.performScan(url));
     const errorsAndAlerts = this.processLighthouseReport(report);
