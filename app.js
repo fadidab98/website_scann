@@ -5,15 +5,8 @@ const ScanController = require('./controllers/ScanController');
 
 const app = express();
 
-const allowedOrigins = ['http://localhost:3030', 'https://fadilogic.serp24.online'];
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: ['http://localhost:3000', 'https://fadilogic.serp24.online'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
 }));

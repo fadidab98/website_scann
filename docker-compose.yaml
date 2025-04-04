@@ -24,7 +24,7 @@ services:
   app:
     build: .
     ports:
-      - "3002:3030"
+      - "3002:3030"  # Maps to port 3002 as requested
     depends_on:
       db:
         condition: service_healthy
@@ -33,9 +33,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'  # Increased from 1.0
-          memory: '2G' # Increased from 1G
-    restart: unless-stopped
+          cpus: '1.5'  # Reduced to save resources
+          memory: '1.5G'
+    restart: unless-stopped  # Ensures continuity
 
 volumes:
   db_data:
