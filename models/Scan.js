@@ -8,9 +8,9 @@ const dbConfig = {
   password: 'f1233211',
   database: 'scans_db',
 };
-const queue = new PQueue({ concurrency: 2 }); // Increased to 2
+const queue = new PQueue({ concurrency: 1 }); // Increased to 2
 let db;
-const EXPIRATION_SECONDS = 86400; // 24 hours for caching
+const EXPIRATION_SECONDS = 172800; // 24 hours for caching
 
 let sharedBrowser = null;
 
