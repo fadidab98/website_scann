@@ -1,6 +1,6 @@
+const puppeteer = require('puppeteer');
 const mysql = require('mysql2/promise');
 const PQueue = require('p-queue').default;
-const puppeteer = require('puppeteer');
 
 const dbConfig = {
   host: 'db',
@@ -8,10 +8,11 @@ const dbConfig = {
   password: 'f1233211',
   database: 'scans_db',
 };
-
+const queue = new PQueue({ concurrency: 1 });
 let db;
-const queue = new PQueue({ concurrency: 2 });
 const EXPIRATION_SECONDS = 7200;
+
+let sharedBrowser = null;
 
 class Scan {
   static async initialize() {
@@ -91,14 +92,32 @@ class Scan {
     console.log(`Saved result for ${url} with expiration at ${new Date(expires_at)}`);
   }
 
+  static async getBrowser() {
+    if (!sharedBrowser || !sharedBrowser.connected) {
+      console.log('Launching new shared browser');
+      sharedBrowser = await puppeteer.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--single-process',
+        ],
+        timeout: 120000,
+      });
+    }
+    return sharedBrowser;
+  }
+
   static async scanUrl(url) {
-   /*  const cachedResult = await this.getCachedResult(url);
-    if (cachedResult) return cachedResult; */
-  
-    const report = await this.performScan(url); // Direct call nstead of queue.add
+    const cachedResult = await this.getCachedResult(url);
+    if (cachedResult) return cachedResult;
+
+    const report = await queue.add(() => this.performScan(url));
     const errorsAndAlerts = this.processLighthouseReport(report);
     const performanceMetrics = this.extractPerformanceMetrics(report);
-  
+
     const scanResult = {
       status: 'completed',
       url: report.finalUrl || url,
@@ -112,7 +131,7 @@ class Scan {
       },
       timestamp: Date.now(),
     };
-  
+
     await this.saveResult(url, 'completed', scanResult);
     return scanResult;
   }
@@ -120,77 +139,80 @@ class Scan {
   static async performScan(url) {
     let browser;
     let page;
-    try {
-      console.log(`DEBUG: Running performScan version 2025-04-03 with waitForTimeout`);
-      console.log(`Puppeteer version: ${puppeteer.version || 'undefined'}`);
-      console.log(`Puppeteer launch available: ${typeof puppeteer.launch === 'function'}`);
-      console.log(`Starting Puppeteer for ${url}`);
-      browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-        timeout: 60000,
-      });
-      console.log(`Browser launched for ${url}: ${browser.wsEndpoint()}`);
+    const maxRetries = 3;
+    let attempt = 0;
 
-      page = await browser.newPage();
-      console.log(`Page created for ${url}`);
-      console.log(`Page has waitForTimeout: ${typeof page.waitForTimeout === 'function'}`);
+    while (attempt < maxRetries) {
+      try {
+        console.log(`DEBUG: Starting scan for ${url}, attempt ${attempt + 1}`);
+        console.log(`Puppeteer version: ${puppeteer.version || 'undefined'}`);
+        console.log(`Puppeteer launch available: ${typeof puppeteer.launch === 'function'}`);
 
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-      console.log(`Navigating to ${url}`);
-      const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-      if (!response.ok()) {
-        throw new Error(`Navigation failed with status ${response.status()}`);
-      }
+        browser = await this.getBrowser();
+        console.log(`Browser in use for ${url}: ${browser.wsEndpoint()}`);
+        console.log(`Browser connected: ${browser.connected}`);
 
-      const currentUrl = await page.url();
-      console.log(`Current URL after navigation: ${currentUrl}`);
+        page = await browser.newPage();
+        console.log(`Page created for ${url}`);
+        console.log(`Page has waitForTimeout: ${typeof page.waitForTimeout === 'function'}`);
 
-      // Temporary workaround: Use Promise delay instead of waitForTimeout
-      console.log('Waiting 2 seconds');
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      const { default: lighthouse } = await import('lighthouse');
-      console.log('Lighthouse imported');
-
-      const runnerResult = await lighthouse(currentUrl, {
-        port: new URL(browser.wsEndpoint()).port,
-        output: 'json',
-        logLevel: 'info',
-        onlyCategories: ['performance'],
-        settings: {
-          maxWaitForLoad: 60000,
-          throttlingMethod: 'provided',
-        },
-      });
-
-      console.log('Lighthouse scan completed');
-      const report = runnerResult.lhr;
-      console.log('Lighthouse audits:', Object.keys(report.audits));
-
-      return report;
-    } catch (error) {
-      console.error(`Scan error for ${url}:`, error.message);
-      throw error;
-    } finally {
-      if (page) {
-        try {
-          await page.close();
-          console.log(`Page closed for ${url}`);
-        } catch (err) {
-          console.error(`Page close error for ${url}:`, err.message);
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+        console.log(`Navigating to ${url}`);
+        const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+        if (!response.ok()) {
+          throw new Error(`Navigation failed with status ${response.status()}`);
         }
-      }
-      if (browser) {
-        try {
+
+        const currentUrl = await page.url();
+        console.log(`Current URL after navigation: ${currentUrl}`);
+
+        console.log('Waiting 2 seconds');
+        // Use Promise delay since waitForTimeout isn’t working
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        const { default: lighthouse } = await import('lighthouse');
+        console.log('Lighthouse imported');
+
+        const runnerResult = await lighthouse(currentUrl, {
+          port: new URL(browser.wsEndpoint()).port,
+          output: 'json',
+          logLevel: 'info',
+          onlyCategories: ['performance'],
+          settings: {
+            maxWaitForLoad: 120000,
+            throttlingMethod: 'provided',
+          },
+        });
+
+        console.log('Lighthouse scan completed');
+        const report = runnerResult.lhr;
+        console.log('Lighthouse audits:', Object.keys(report.audits));
+
+        return report;
+      } catch (error) {
+        console.error(`Scan error for ${url} on attempt ${attempt + 1}:`, error.message);
+        attempt++;
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        if (error.message.includes('closed state') && browser && browser.connected) {
           await browser.close();
-          console.log(`Browser closed for ${url}`);
-        } catch (err) {
-          console.error(`Browser close error for ${url}:`, err.message);
+          sharedBrowser = null;
+        }
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      } finally {
+        if (page && !page.isClosed()) {
+          try {
+            await page.close();
+            console.log(`Page closed for ${url}`);
+          } catch (err) {
+            console.error(`Page close error for ${url}:`, err.message);
+          }
         }
       }
     }
   }
+
   static processLighthouseReport(report) {
     const issues = [];
     const descriptions = {
