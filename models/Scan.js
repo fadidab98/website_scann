@@ -113,8 +113,8 @@ class Scan {
   }
 
   static async scanUrl(url) {
-    const cachedResult = await this.getCachedResult(url);
-    if (cachedResult) return cachedResult;
+/*     const cachedResult = await this.getCachedResult(url);
+    if (cachedResult) return cachedResult; */
 
     const report = await queue.add(() => this.performScan(url));
     const errorsAndAlerts = this.processLighthouseReport(report);
