@@ -33,8 +33,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 1G
+          cpus: '2.0'
+          memory: '2G'
+      replicas: 2 # Scale to 2 instances
     restart: unless-stopped
 
 volumes:

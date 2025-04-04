@@ -8,9 +8,9 @@ const dbConfig = {
   password: 'f1233211',
   database: 'scans_db',
 };
-const queue = new PQueue({ concurrency: 1 });
+const queue = new PQueue({ concurrency: 2 }); // Increased to 2
 let db;
-const EXPIRATION_SECONDS = 7200;
+const EXPIRATION_SECONDS = 86400; // 24 hours for caching
 
 let sharedBrowser = null;
 
@@ -102,7 +102,9 @@ class Scan {
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
-          '--single-process',
+          '--disable-extensions',
+          '--no-zygote',
+          '--disable-accelerated-2d-canvas',
         ],
         timeout: 120000,
       });
@@ -111,8 +113,8 @@ class Scan {
   }
 
   static async scanUrl(url) {
-/*     const cachedResult = await this.getCachedResult(url);
-    if (cachedResult) return cachedResult; */
+    const cachedResult = await this.getCachedResult(url);
+    if (cachedResult) return cachedResult;
 
     const report = await queue.add(() => this.performScan(url));
     const errorsAndAlerts = this.processLighthouseReport(report);
@@ -159,15 +161,15 @@ class Scan {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
         console.log(`Navigating to ${url}`);
         const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
-        if (!response.ok()) {
-          throw new Error(`Navigation failed with status ${response.status()}`);
+        const status = response.status();
+        if (!(response.ok() || status === 304)) {
+          throw new Error(`Navigation failed with status ${status}`);
         }
 
         const currentUrl = await page.url();
         console.log(`Current URL after navigation: ${currentUrl}`);
 
         console.log('Waiting 2 seconds');
-        // Use Promise delay since waitForTimeout isn’t working
         await new Promise(resolve => setTimeout(resolve, 2000));
 
         const { default: lighthouse } = await import('lighthouse');
@@ -179,7 +181,7 @@ class Scan {
           logLevel: 'info',
           onlyCategories: ['performance'],
           settings: {
-            maxWaitForLoad: 120000,
+            maxWaitForLoad: 60000, // Reduced for efficiency
             throttlingMethod: 'provided',
           },
         });
@@ -192,14 +194,16 @@ class Scan {
       } catch (error) {
         console.error(`Scan error for ${url} on attempt ${attempt + 1}:`, error.message);
         attempt++;
-        if (attempt === maxRetries) {
+        if (attempt < maxRetries) {
+          if (browser && browser.connected) {
+            console.log(`Resetting shared browser due to error: ${error.message}`);
+            await browser.close().catch(err => console.error(`Browser close error: ${err.message}`));
+          }
+          sharedBrowser = null;
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        } else {
           throw error;
         }
-        if (error.message.includes('closed state') && browser && browser.connected) {
-          await browser.close();
-          sharedBrowser = null;
-        }
-        await new Promise(resolve => setTimeout(resolve, 5000));
       } finally {
         if (page && !page.isClosed()) {
           try {
@@ -227,10 +231,9 @@ class Scan {
       'render-blocking-resources': 'Render-blocking resources delay the first paint of your page. [Learn more](https://web.dev/render-blocking-resources/).',
       'uses-long-cache-ttl': 'A long cache lifetime can speed up repeat visits to your page. [Learn more](https://web.dev/uses-long-cache-ttl/).',
     };
-  
+
     for (const [auditId, audit] of Object.entries(report.audits)) {
       console.log(`Audit ${auditId}: score=${audit.score}, displayValue=${audit.displayValue || 'N/A'}`);
-      // Only include audits with issues (score < 1) or manual review required
       if ((audit.score !== null && audit.score < 1) || audit.scoreDisplayMode === 'manual') {
         issues.push({
           type: audit.scoreDisplayMode === 'manual' ? 'alert' : 'error',
@@ -242,8 +245,7 @@ class Scan {
         });
       }
     }
-  
-    // Example dynamic alert based on specific condition
+
     if (report.audits['uses-long-cache-ttl'] && report.audits['uses-long-cache-ttl'].score < 1) {
       issues.push({
         type: 'alert',
@@ -254,7 +256,7 @@ class Scan {
         displayValue: report.audits['uses-long-cache-ttl'].displayValue || 'N/A',
       });
     }
-  
+
     return issues;
   }
 
