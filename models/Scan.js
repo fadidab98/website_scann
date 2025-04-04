@@ -216,35 +216,45 @@ class Scan {
   static processLighthouseReport(report) {
     const issues = [];
     const descriptions = {
-      'first-contentful-paint': 'First Contentful Paint marks the time at which the first text or image is painted. [Learn more about the First Contentful Paint metric](https://developer.chrome.com/docs/lighthouse/performance/first-contentful-paint/).',
-      'speed-index': 'Speed Index shows how quickly the contents of a page are visibly populated. [Learn more about the Speed Index metric](https://developer.chrome.com/docs/lighthouse/performance/speed-index/).',
-      'largest-contentful-paint': 'Largest Contentful Paint marks the time at which the largest text or image is painted. [Learn more about the Largest Contentful Paint metric](https://developer.chrome.com/docs/lighthouse/performance/lighthouse-largest-contentful-paint/).',
-      'interactive': 'The maximum potential First Input Delay that your users could experience is the duration of the longest task. [Learn more about the Maximum Potential First Input Delay metric](https://developer.chrome.com/docs/lighthouse/performance/lighthouse-max-potential-fid/).',
+      'first-contentful-paint': 'First Contentful Paint marks the time at which the first text or image is painted. [Learn more](https://developer.chrome.com/docs/lighthouse/performance/first-contentful-paint/).',
+      'speed-index': 'Speed Index shows how quickly the contents of a page are visibly populated. [Learn more](https://developer.chrome.com/docs/lighthouse/performance/speed-index/).',
+      'largest-contentful-paint': 'Largest Contentful Paint marks the time at which the largest text or image is painted. [Learn more](https://developer.chrome.com/docs/lighthouse/performance/lighthouse-largest-contentful-paint/).',
+      'interactive': 'The maximum potential First Input Delay that your users could experience is the duration of the longest task. [Learn more](https://developer.chrome.com/docs/lighthouse/performance/lighthouse-max-potential-fid/).',
       'total-blocking-time': 'Total Blocking Time measures the total time during which tasks block the main thread. [Learn more](https://web.dev/tbt/).',
-      'cumulative-layout-shift': 'Cumulative Layout Shift measures the movement of visible elements within the viewport. [Learn more about the Cumulative Layout Shift metric](https://web.dev/articles/cls).',
+      'cumulative-layout-shift': 'Cumulative Layout Shift measures the movement of visible elements within the viewport. [Learn more](https://web.dev/articles/cls).',
       'time-to-first-byte': 'Time to First Byte measures the time from navigation to the first byte received. [Learn more](https://web.dev/time-to-first-byte/).',
       'first-meaningful-paint': 'First Meaningful Paint measures when the primary content is visible. [Learn more](https://developer.chrome.com/docs/lighthouse/performance/first-meaningful-paint/).',
       'render-blocking-resources': 'Render-blocking resources delay the first paint of your page. [Learn more](https://web.dev/render-blocking-resources/).',
       'uses-long-cache-ttl': 'A long cache lifetime can speed up repeat visits to your page. [Learn more](https://web.dev/uses-long-cache-ttl/).',
     };
-
+  
     for (const [auditId, audit] of Object.entries(report.audits)) {
-      console.log(`Audit ${auditId}: ${audit.numericValue || audit.score || 'N/A'}`);
+      console.log(`Audit ${auditId}: score=${audit.score}, displayValue=${audit.displayValue || 'N/A'}`);
+      // Only include audits with issues (score < 1) or manual review required
+      if ((audit.score !== null && audit.score < 1) || audit.scoreDisplayMode === 'manual') {
+        issues.push({
+          type: audit.scoreDisplayMode === 'manual' ? 'alert' : 'error',
+          title: auditId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+          description: descriptions[auditId] || audit.description || 'Performance issue detected.',
+          suggestion: 'Review the issue and update the relevant HTML/CSS.',
+          score: audit.score,
+          displayValue: audit.displayValue || 'N/A',
+        });
+      }
+    }
+  
+    // Example dynamic alert based on specific condition
+    if (report.audits['uses-long-cache-ttl'] && report.audits['uses-long-cache-ttl'].score < 1) {
       issues.push({
-        type: 'error',
-        title: auditId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-        description: descriptions[auditId] || audit.description || 'Performance issue detected.',
+        type: 'alert',
+        title: 'Use Efficient Cache Lifetimes',
+        description: descriptions['uses-long-cache-ttl'],
         suggestion: 'Review the issue and update the relevant HTML/CSS.',
+        score: report.audits['uses-long-cache-ttl'].score,
+        displayValue: report.audits['uses-long-cache-ttl'].displayValue || 'N/A',
       });
     }
-
-    issues.push({
-      type: 'alert',
-      title: 'Use Efficient Cache Lifetimes',
-      description: descriptions['uses-long-cache-ttl'],
-      suggestion: 'Review the issue and update the relevant HTML/CSS.',
-    });
-
+  
     return issues;
   }
 
