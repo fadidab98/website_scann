@@ -10,7 +10,7 @@ const dbConfig = {
 };
 const queue = new PQueue({ concurrency: 2 }); // Allows 2 scans at once
 let db;
-const EXPIRATION_SECONDS = 120; // 48 hours
+const EXPIRATION_SECONDS = 120; // 2 minutes for testing, adjust later
 
 class Scan {
   static async initialize() {
@@ -102,7 +102,7 @@ class Scan {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--single-process',  // Reduces memory usage
+            '--single-process',
           ],
           timeout: 120000,
         });
@@ -118,10 +118,15 @@ class Scan {
         const runnerResult = await lighthouse(await page.url(), {
           port: new URL(browser.wsEndpoint()).port,
           output: 'json',
-          onlyCategories: ['performance'],
-          settings: { maxWaitForLoad: 30000 },  // Reduced for efficiency
+          onlyCategories: ['performance'],  // Ensure performance category is included
+          settings: {
+            maxWaitForLoad: 60000,  // Increased to ensure full load
+            throttlingMethod: 'simulate',  // Simulate real-world conditions for scoring
+            emulatedFormFactor: 'desktop',  // Consistent device for scoring
+          },
         });
 
+        console.log('Lighthouse report categories:', JSON.stringify(runnerResult.lhr.categories, null, 2));
         return runnerResult.lhr;
       } catch (error) {
         console.error(`Scan failed for ${url}: ${error.message}`);
@@ -136,33 +141,78 @@ class Scan {
 
   static processLighthouseReport(report) {
     const issues = [];
+    const descriptions = {
+      'first-contentful-paint': 'First Contentful Paint marks the time at which the first text or image is painted.',
+      'speed-index': 'Speed Index shows how quickly the contents of a page are visibly populated.',
+      'largest-contentful-paint': 'Largest Contentful Paint marks the time at which the largest text or image is painted.',
+      'interactive': 'The maximum potential First Input Delay that your users could experience.',
+      'total-blocking-time': 'Total Blocking Time measures the total time during which tasks block the main thread.',
+      'cumulative-layout-shift': 'Cumulative Layout Shift measures the movement of visible elements within the viewport.',
+      'time-to-first-byte': 'Time to First Byte measures the time from navigation to the first byte received.',
+      'first-meaningful-paint': 'First Meaningful Paint measures when the primary content is visible.',
+      'render-blocking-resources': 'Render-blocking resources delay the first paint of your page.',
+      'uses-long-cache-ttl': 'A long cache lifetime can speed up repeat visits to your page.',
+    };
+
     for (const [auditId, audit] of Object.entries(report.audits)) {
+      console.log(`Audit ${auditId}: score=${audit.score}, displayValue=${audit.displayValue || 'N/A'}`);
       if ((audit.score !== null && audit.score < 1) || audit.scoreDisplayMode === 'manual') {
         issues.push({
           type: audit.scoreDisplayMode === 'manual' ? 'alert' : 'error',
           title: auditId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-          description: audit.description || 'Performance issue detected.',
-          suggestion: 'Review and optimize.',
+          description: descriptions[auditId] || audit.description || 'Performance issue detected.',
+          suggestion: 'Review the issue and update the relevant HTML/CSS.',
           score: audit.score,
           displayValue: audit.displayValue || 'N/A',
         });
       }
     }
+
     return issues;
   }
 
   static extractPerformanceMetrics(report) {
     const audits = report.audits || {};
-    const safeValue = (value) => (typeof value === 'number' ? value / 1000 : 0);
+    const safeValue = (value) => (typeof value === 'number' && !isNaN(value) ? value / 1000 : 0);
+    const safeDisplay = (value, defaultUnit = 's') => {
+      if (typeof value !== 'number' || isNaN(value)) return `0 ${defaultUnit}`;
+      if (defaultUnit === 's') return `${(value / 1000).toFixed(1)} s`;
+      if (defaultUnit === 'ms') return `${value} ms`;
+      return value.toFixed(3).replace(/^0\./, '.');
+    };
+
+    const performanceScore = Math.round(report.categories?.performance?.score * 100 || 0);
+    if (performanceScore === 0) {
+      console.warn('Performance score is 0, check Lighthouse report:', JSON.stringify(report.categories, null, 2));
+    }
+
     return {
-      performanceScore: Math.round(report.categories?.performance?.score * 100 || 0),
+      performanceScore,
       metrics: {
-        firstContentfulPaint: { value: safeValue(audits['first-contentful-paint']?.numericValue) },
-        speedIndex: { value: safeValue(audits['speed-index']?.numericValue) },
-        largestContentfulPaint: { value: safeValue(audits['largest-contentful-paint']?.numericValue) },
-        timeToInteractive: { value: safeValue(audits['interactive']?.numericValue) },
-        totalBlockingTime: { value: audits['total-blocking-time']?.numericValue || 0 },
-        cumulativeLayoutShift: { value: audits['cumulative-layout-shift']?.numericValue || 0 },
+        firstContentfulPaint: {
+          value: safeValue(audits['first-contentful-paint']?.numericValue),
+          displayValue: audits['first-contentful-paint']?.displayValue || safeDisplay(audits['first-contentful-paint']?.numericValue, 's'),
+        },
+        speedIndex: {
+          value: safeValue(audits['speed-index']?.numericValue),
+          displayValue: audits['speed-index']?.displayValue || safeDisplay(audits['speed-index']?.numericValue, 's'),
+        },
+        largestContentfulPaint: {
+          value: safeValue(audits['largest-contentful-paint']?.numericValue),
+          displayValue: audits['largest-contentful-paint']?.displayValue || safeDisplay(audits['largest-contentful-paint']?.numericValue, 's'),
+        },
+        timeToInteractive: {
+          value: safeValue(audits['interactive']?.numericValue),
+          displayValue: audits['interactive']?.displayValue || safeDisplay(audits['interactive']?.numericValue, 's'),
+        },
+        totalBlockingTime: {
+          value: audits['total-blocking-time']?.numericValue || 0,
+          displayValue: audits['total-blocking-time']?.displayValue || safeDisplay(audits['total-blocking-time']?.numericValue, 'ms'),
+        },
+        cumulativeLayoutShift: {
+          value: audits['cumulative-layout-shift']?.numericValue || 0,
+          displayValue: audits['cumulative-layout-shift']?.displayValue || safeDisplay(audits['cumulative-layout-shift']?.numericValue || 0, ''),
+        },
       },
     };
   }
