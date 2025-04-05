@@ -1,41 +1,19 @@
 version: '3'
 services:
-  db:
-    image: mysql:5.7
-    environment:
-      MYSQL_DATABASE: scans_db
-      MYSQL_USER: admin
-      MYSQL_PASSWORD: f1233211
-      MYSQL_ROOT_PASSWORD: rootpassword
-    volumes:
-      - db_data:/var/lib/mysql
-    command: --max_connections=200 --wait_timeout=600
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "admin", "-pf1233211"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   app:
     build: .
     ports:
-      - "3002:3030"  # Maps to port 3002 as requested
-    depends_on:
-      db:
-        condition: service_healthy
+      - "3002:3030"
+    
     environment:
       - NODE_ENV=production
     deploy:
       resources:
         limits:
-          cpus: '1.5'  # Reduced to save resources
-          memory: '1.5G'
-    restart: unless-stopped  # Ensures continuity
+          cpus: '2.0'  # Increased from 1.0
+          memory: '2G' # Increased from 1G
+    restart: unless-stopped
 
 volumes:
   db_data:

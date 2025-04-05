@@ -3,10 +3,11 @@ const mysql = require('mysql2/promise');
 const PQueue = require('p-queue').default;
 
 const dbConfig = {
-  host: 'db',
-  user: 'admin',
-  password: 'f1233211',
-  database: 'scans_db',
+  host: 'pma-db.serp24.online',
+  user: 'webscan',
+  password: 'webscan',
+  database: 'webscan',
+  port:3306
 };
 const queue = new PQueue({ concurrency: 2 }); // Allows 2 scans at once
 let db;
@@ -21,7 +22,7 @@ class Scan {
       try {
         db = await mysql.createConnection(dbConfig);
         console.log('Connected to MySQL database in Scan model');
-        await db.execute(`CREATE TABLE IF NOT EXISTS scans (
+        await db.execute(`CREATE TABLE IF NOT EXISTS webscan (
           id INT AUTO_INCREMENT PRIMARY KEY,
           url VARCHAR(255) UNIQUE,
           status VARCHAR(50),
@@ -58,7 +59,7 @@ class Scan {
     const timestamp = Date.now();
     const expires_at = timestamp + EXPIRATION_SECONDS * 1000;
     await db.execute(
-      'INSERT INTO scans (url, status, result, timestamp, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = ?, result = ?, timestamp = ?, expires_at = ?',
+      'INSERT INTO webscan (url, status, result, timestamp, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = ?, result = ?, timestamp = ?, expires_at = ?',
       [url, status, JSON.stringify(result), timestamp, expires_at, status, JSON.stringify(result), timestamp, expires_at]
     );
   }
