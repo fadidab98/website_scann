@@ -9,19 +9,16 @@ const dbConfig = {
   database: 'webscan',
   port:3306
 };
-const queue = new PQueue({ concurrency: 2 }); // Allows 2 scans at once
+const queue = new PQueue({ concurrency: 1 }); // 1 scan at a time for stability
 let db;
-const EXPIRATION_SECONDS = 120; // 2 minutes for testing, adjust later
+const EXPIRATION_SECONDS = 172800; // 48 hours
 
 class Scan {
   static async initialize() {
     const maxRetries = 10;
-    const retryDelay = 2000;
-
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         db = await mysql.createConnection(dbConfig);
-        console.log('Connected to MySQL database in Scan model');
         await db.execute(`CREATE TABLE IF NOT EXISTS webscan (
           id INT AUTO_INCREMENT PRIMARY KEY,
           url VARCHAR(255) UNIQUE,
@@ -30,38 +27,65 @@ class Scan {
           timestamp BIGINT,
           expires_at BIGINT
         )`);
+        console.log('Database initialized');
+        this.startKeepAlive();
         return;
       } catch (error) {
-        console.error(`Connection attempt ${attempt} failed:`, error.message);
-        if (attempt === maxRetries) throw new Error('Failed to connect to scans_db');
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        console.error(`DB init attempt ${attempt} failed:`, error.message);
+        if (attempt === maxRetries) throw error;
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
   }
 
-  static async getCachedResult(url) {
-    const [rows] = await db.execute(
-      'SELECT result, expires_at FROM scans WHERE url = ? AND status = "completed"',
-      [url]
-    );
-    if (rows.length > 0) {
-      const { result, expires_at } = rows[0];
-      const now = Date.now();
-      if (now < expires_at) {
-        console.log(`Returning cached result for ${url}`);
-        return result;
+  static startKeepAlive() {
+    setInterval(async () => {
+      try {
+        if (!db) await this.connectToDatabase();
+        await db.ping();
+        console.log('MySQL connection kept alive');
+      } catch (error) {
+        console.error('Keep-alive ping failed:', error.message);
+        db = null;
       }
+    }, 300000); // Every 5 minutes
+  }
+
+  static async connectToDatabase() {
+    db = await mysql.createConnection(dbConfig);
+  }
+
+  static async getCachedResult(url) {
+    if (!db) await this.connectToDatabase();
+    try {
+      const [rows] = await db.execute(
+        'SELECT result, expires_at FROM webscan WHERE url = ? AND status = "completed"',
+        [url]
+      );
+      if (rows.length > 0 && Date.now() < rows[0].expires_at) {
+        return rows[0].result;
+      }
+    } catch (error) {
+      console.error(`getCachedResult failed for ${url}:`, error.message);
+      db = null;
     }
     return null;
   }
 
   static async saveResult(url, status, result) {
+    if (!db) await this.connectToDatabase();
     const timestamp = Date.now();
     const expires_at = timestamp + EXPIRATION_SECONDS * 1000;
-    await db.execute(
-      'INSERT INTO webscan (url, status, result, timestamp, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = ?, result = ?, timestamp = ?, expires_at = ?',
-      [url, status, JSON.stringify(result), timestamp, expires_at, status, JSON.stringify(result), timestamp, expires_at]
-    );
+    try {
+      await db.execute(
+        'INSERT INTO webscan (url, status, result, timestamp, expires_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = ?, result = ?, timestamp = ?, expires_at = ?',
+        [url, status, JSON.stringify(result), timestamp, expires_at, status, JSON.stringify(result), timestamp, expires_at]
+      );
+    } catch (error) {
+      console.error(`saveResult failed for ${url}:`, error.message);
+      db = null;
+      throw error;
+    }
   }
 
   static async scanUrl(url) {
@@ -75,7 +99,6 @@ class Scan {
     const scanResult = {
       status: 'completed',
       url: report.finalUrl || url,
-      originalUrl: url,
       results: {
         errors: errorsAndAlerts.filter(item => item.type === 'error'),
         alerts: errorsAndAlerts.filter(item => item.type === 'alert'),
@@ -103,15 +126,18 @@ class Scan {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--single-process',
+            // Removed '--single-process' for full scoring
           ],
-          timeout: 120000,
+          timeout: 180000,
         });
         page = await browser.newPage();
 
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-        const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
-        if (!response.ok()) throw new Error(`Navigation failed with status ${response.status()}`);
+        const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
+        const status = response.status();
+        if (!(response.ok() || status === 304)) {
+          throw new Error(`Navigation failed with status ${status}`);
+        }
 
         await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -119,23 +145,36 @@ class Scan {
         const runnerResult = await lighthouse(await page.url(), {
           port: new URL(browser.wsEndpoint()).port,
           output: 'json',
-          onlyCategories: ['performance'],  // Ensure performance category is included
+          onlyCategories: ['performance'],
+          audits: [  // Explicitly include key audits
+            'first-contentful-paint',
+            'speed-index',
+            'largest-contentful-paint',
+            'interactive',
+            'total-blocking-time',
+            'cumulative-layout-shift'
+          ],
           settings: {
-            maxWaitForLoad: 60000,  // Increased to ensure full load
-            throttlingMethod: 'simulate',  // Simulate real-world conditions for scoring
-            emulatedFormFactor: 'desktop',  // Consistent device for scoring
+            maxWaitForLoad: 90000,
+            throttling: {
+              rttMs: 40,
+              throughputKbps: 10240,
+              cpuSlowdownMultiplier: 1,
+            },
+            emulatedFormFactor: 'desktop',
+            screenEmulation: { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1 },
           },
         });
 
-        console.log('Lighthouse report categories:', JSON.stringify(runnerResult.lhr.categories, null, 2));
+        console.log('Full Lighthouse report:', JSON.stringify(runnerResult.lhr, null, 2));
         return runnerResult.lhr;
       } catch (error) {
-        console.error(`Scan failed for ${url}: ${error.message}`);
+        console.error(`Scan failed for ${url}, attempt ${attempt + 1}: ${error.message}`);
         if (attempt === maxRetries - 1) throw error;
         await new Promise(resolve => setTimeout(resolve, 5000));
       } finally {
-        if (page) await page.close().catch(() => {});
-        if (browser) await browser.close().catch(() => {});
+        if (page) await page.close().catch(err => console.error(`Page close error: ${err.message}`));
+        if (browser) await browser.close().catch(err => console.error(`Browser close error: ${err.message}`));
       }
     }
   }
@@ -143,32 +182,26 @@ class Scan {
   static processLighthouseReport(report) {
     const issues = [];
     const descriptions = {
-      'first-contentful-paint': 'First Contentful Paint marks the time at which the first text or image is painted.',
-      'speed-index': 'Speed Index shows how quickly the contents of a page are visibly populated.',
-      'largest-contentful-paint': 'Largest Contentful Paint marks the time at which the largest text or image is painted.',
-      'interactive': 'The maximum potential First Input Delay that your users could experience.',
-      'total-blocking-time': 'Total Blocking Time measures the total time during which tasks block the main thread.',
-      'cumulative-layout-shift': 'Cumulative Layout Shift measures the movement of visible elements within the viewport.',
-      'time-to-first-byte': 'Time to First Byte measures the time from navigation to the first byte received.',
-      'first-meaningful-paint': 'First Meaningful Paint measures when the primary content is visible.',
-      'render-blocking-resources': 'Render-blocking resources delay the first paint of your page.',
-      'uses-long-cache-ttl': 'A long cache lifetime can speed up repeat visits to your page.',
+      'first-contentful-paint': 'First Contentful Paint measures initial paint time.',
+      'speed-index': 'Speed Index shows how quickly content is populated.',
+      'largest-contentful-paint': 'Largest Contentful Paint measures largest element render time.',
+      'interactive': 'Time to Interactive measures when the page is fully interactive.',
+      'total-blocking-time': 'Total Blocking Time sums up main thread blocking.',
+      'cumulative-layout-shift': 'Cumulative Layout Shift measures visual stability.',
     };
 
-    for (const [auditId, audit] of Object.entries(report.audits)) {
-      console.log(`Audit ${auditId}: score=${audit.score}, displayValue=${audit.displayValue || 'N/A'}`);
+    for (const [auditId, audit] of Object.entries(report.audits || {})) {
       if ((audit.score !== null && audit.score < 1) || audit.scoreDisplayMode === 'manual') {
         issues.push({
           type: audit.scoreDisplayMode === 'manual' ? 'alert' : 'error',
           title: auditId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-          description: descriptions[auditId] || audit.description || 'Performance issue detected.',
-          suggestion: 'Review the issue and update the relevant HTML/CSS.',
+          description: descriptions[auditId] || audit.description || 'Issue detected.',
+          suggestion: 'Review and optimize.',
           score: audit.score,
           displayValue: audit.displayValue || 'N/A',
         });
       }
     }
-
     return issues;
   }
 
@@ -177,14 +210,12 @@ class Scan {
     const safeValue = (value) => (typeof value === 'number' && !isNaN(value) ? value / 1000 : 0);
     const safeDisplay = (value, defaultUnit = 's') => {
       if (typeof value !== 'number' || isNaN(value)) return `0 ${defaultUnit}`;
-      if (defaultUnit === 's') return `${(value / 1000).toFixed(1)} s`;
-      if (defaultUnit === 'ms') return `${value} ms`;
-      return value.toFixed(3).replace(/^0\./, '.');
+      return defaultUnit === 's' ? `${(value / 1000).toFixed(1)} s` : `${value} ms`;
     };
 
     const performanceScore = Math.round(report.categories?.performance?.score * 100 || 0);
     if (performanceScore === 0) {
-      console.warn('Performance score is 0, check Lighthouse report:', JSON.stringify(report.categories, null, 2));
+      console.warn('Performance score is 0, report details:', JSON.stringify(report.categories, null, 2));
     }
 
     return {
