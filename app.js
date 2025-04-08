@@ -6,7 +6,7 @@ const ScanController = require('./controllers/ScanController');
 const app = express();
 
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://*.serp24.online'],
+  origin: ['http://localhost:3000', 'https://fadilogic.serp24.online', 'https://serp24.online'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
 }));
