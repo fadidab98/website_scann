@@ -14,6 +14,17 @@ services:
           cpus: '2.0'  # Increased from 1.0
           memory: '2G' # Increased from 1G
     restart: unless-stopped
-
+  nginx-config:
+    image: alpine:latest
+    volumes:
+      - ./nginx.conf:/nginx.conf:ro
+      - /etc/nginx/sites-available:/sites-available
+      - /etc/nginx/sites-enabled:/sites-enabled
+    command: >
+      sh -c "cp -f /nginx.conf /sites-available/webscan.serp24.online &&
+             ln -sf /etc/nginx/sites-available/webscan.serp24.online /sites-enabled/webscan.serp24.online &&
+             ls -l /sites-enabled/webscan.serp24.online &&
+             nginx -t && systemctl restart nginx|| echo 'NGINX test failed'"
+    # Runs once and exits
 volumes:
   db_data:
