@@ -86,7 +86,7 @@ pipeline {
                                     docker-compose -f docker-compose.yaml down || true && \
                                     docker-compose -f docker-compose.yaml up -d && \
                                  
-                                    echo 'Direct copy succeeded'; }"
+                                    echo 'Direct copy succeeded'; "
                                 """
                             }
                         }
