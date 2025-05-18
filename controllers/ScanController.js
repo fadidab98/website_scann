@@ -3,9 +3,20 @@ const ScanView = require('../views/ScanView');
 
 class ScanController {
   static async scan(req, res) {
-    const { url } = req.body;
+    let { url } = req.body;
 
-    if (!url || !url.match(/^https?:\/\/[^\s/$.?#].[^\s]*$/i)) {
+    // Ensure URL has a protocol
+    if (!url) {
+      return res.status(400).json(ScanView.error('Invalid URL'));
+    }
+
+    // Add https:// if no protocol is specified
+    if (!url.match(/^https?:\/\//i)) {
+      url = `https://${url}`;
+    }
+
+    // Validate the URL
+    if (!url.match(/^https?:\/\/[^\s/$.?#].[^\s]*$/i)) {
       return res.status(400).json(ScanView.error('Invalid URL'));
     }
 
