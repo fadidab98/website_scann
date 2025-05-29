@@ -7,9 +7,9 @@ const dbConfig = {
   user: 'webscan',
   password: 'webscan',
   database: 'webscan',
-  port:3306
+  port: 3306
 };
-const queue = new PQueue({ concurrency: 1 }); // 1 scan at a time for stability
+const queue = new PQueue({ concurrency: 1 });
 let db;
 const EXPIRATION_SECONDS = 172800; // 48 hours
 
@@ -48,7 +48,7 @@ class Scan {
         console.error('Keep-alive ping failed:', error.message);
         db = null;
       }
-    }, 300000); // Every 5 minutes
+    }, 300000);
   }
 
   static async connectToDatabase() {
@@ -89,22 +89,34 @@ class Scan {
   }
 
   static async scanUrl(url) {
-/*     const cachedResult = await this.getCachedResult(url);
-    if (cachedResult) return cachedResult; */
+    // Re-enable caching if desired
+    const cachedResult = await this.getCachedResult(url);
+    if (cachedResult) return cachedResult;
 
     const report = await queue.add(() => this.performScan(url));
-    const errorsAndAlerts = this.processLighthouseReport(report);
+    const performanceIssues = this.processLighthouseReport(report, 'performance');
+    const accessibilityIssues = this.processLighthouseReport(report, 'accessibility');
     const performanceMetrics = this.extractPerformanceMetrics(report);
+    const accessibilityMetrics = this.extractAccessibilityMetrics(report);
 
     const scanResult = {
       status: 'completed',
       url: report.finalUrl || url,
       results: {
-        errors: errorsAndAlerts.filter(item => item.type === 'error'),
-        alerts: errorsAndAlerts.filter(item => item.type === 'alert'),
-        totalErrors: errorsAndAlerts.filter(item => item.type === 'error').length,
-        totalAlerts: errorsAndAlerts.filter(item => item.type === 'alert').length,
-        performance: performanceMetrics,
+        performance: {
+          errors: performanceIssues.filter(item => item.type === 'error'),
+          alerts: performanceIssues.filter(item => item.type === 'alert'),
+          totalErrors: performanceIssues.filter(item => item.type === 'error').length,
+          totalAlerts: performanceIssues.filter(item => item.type === 'alert').length,
+          metrics: performanceMetrics,
+        },
+        accessibility: {
+          errors: accessibilityIssues.filter(item => item.type === 'error'),
+          alerts: accessibilityIssues.filter(item => item.type === 'alert'),
+          totalErrors: accessibilityIssues.filter(item => item.type === 'error').length,
+          totalAlerts: accessibilityIssues.filter(item => item.type === 'alert').length,
+          metrics: accessibilityMetrics,
+        },
       },
       timestamp: Date.now(),
     };
@@ -126,7 +138,6 @@ class Scan {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            // Removed '--single-process' for full scoring
           ],
           timeout: 180000,
         });
@@ -141,18 +152,31 @@ class Scan {
 
         await new Promise(resolve => setTimeout(resolve, 2000));
 
+        // Extract HTML for custom accessibility checks
+        const htmlContent = await page.content();
+
         const { default: lighthouse } = await import('lighthouse');
         const runnerResult = await lighthouse(await page.url(), {
           port: new URL(browser.wsEndpoint()).port,
           output: 'json',
-          onlyCategories: ['performance'],
-          audits: [  // Explicitly include key audits
+          onlyCategories: ['performance', 'accessibility'], // Added accessibility
+          audits: [
+            // Performance audits
             'first-contentful-paint',
             'speed-index',
             'largest-contentful-paint',
             'interactive',
             'total-blocking-time',
-            'cumulative-layout-shift'
+            'cumulative-layout-shift',
+            // Accessibility audits
+            'accesskeys',
+            'aria-allowed-attr',
+            'aria-hidden-body',
+            'aria-required-attr',
+            'image-alt',
+            'label',
+            'link-name',
+            'color-contrast',
           ],
           settings: {
             maxWaitForLoad: 90000,
@@ -166,6 +190,10 @@ class Scan {
           },
         });
 
+        // Add custom HTML accessibility checks
+        const customAccessibilityIssues = await this.checkHtmlAccessibility(page, htmlContent);
+        runnerResult.lhr.customAccessibilityIssues = customAccessibilityIssues;
+
         console.log('Full Lighthouse report:', JSON.stringify(runnerResult.lhr, null, 2));
         return runnerResult.lhr;
       } catch (error) {
@@ -173,35 +201,133 @@ class Scan {
         if (attempt === maxRetries - 1) throw error;
         await new Promise(resolve => setTimeout(resolve, 5000));
       } finally {
-        if (page) await page.close().catch(err => console.error(`Page close error: ${err.message}`));
-        if (browser) await browser.close().catch(err => console.error(`Browser close error: ${err.message}`));
+        if (page) {
+          try {
+            await page.close();
+          } catch (err) {
+            console.error(`Page close error: ${err.message}`);
+          }
+        }
+        if (browser) {
+          try {
+            await browser.close();
+          } catch (err) {
+            console.error(`Browser close error: ${err.message}`);
+          }
+        }
       }
     }
   }
 
-  static processLighthouseReport(report) {
+  static async checkHtmlAccessibility(page, htmlContent) {
+    // Custom HTML accessibility checks to mimic WAVE
+    const issues = [];
+    try {
+      // Check for images without alt attributes
+      const images = await page.$$eval('img', imgs =>
+        imgs.map(img => ({
+          src: img.src,
+          alt: img.getAttribute('alt'),
+        }))
+      );
+      images.forEach(img => {
+        if (!img.alt && img.alt !== '') {
+          issues.push({
+            type: 'error',
+            title: 'Missing Image Alt Text',
+            description: `Image with src "${img.src}" is missing an alt attribute.`,
+            suggestion: 'Add a descriptive alt attribute to the image.',
+          });
+        }
+      });
+
+      // Check for form inputs without labels
+      const inputs = await page.$$eval('input:not([type="hidden"])', inputs =>
+        inputs.map(input => ({
+          id: input.id,
+          hasLabel: !!document.querySelector(`label[for="${input.id}"]`),
+        }))
+      );
+      inputs.forEach(input => {
+        if (!input.hasLabel && input.id) {
+          issues.push({
+            type: 'error',
+            title: 'Missing Form Label',
+            description: `Input with id "${input.id}" lacks an associated label.`,
+            suggestion: 'Add a <label> element with a for attribute matching the input’s id.',
+          });
+        }
+      });
+
+      // Check for empty links
+      const links = await page.$$eval('a', anchors =>
+        anchors.map(a => ({
+          href: a.href,
+          text: a.textContent.trim(),
+        }))
+      );
+      links.forEach(link => {
+        if (!link.text && !link.href.includes('#')) {
+          issues.push({
+            type: 'alert',
+            title: 'Empty Link Text',
+            description: `Link with href "${link.href}" has no visible text.`,
+            suggestion: 'Provide descriptive text or an aria-label for the link.',
+          });
+        }
+      });
+    } catch (error) {
+      console.error('Custom HTML accessibility check failed:', error.message);
+    }
+    return issues;
+  }
+
+  static processLighthouseReport(report, category) {
     const issues = [];
     const descriptions = {
+      // Performance descriptions
       'first-contentful-paint': 'First Contentful Paint measures initial paint time.',
       'speed-index': 'Speed Index shows how quickly content is populated.',
       'largest-contentful-paint': 'Largest Contentful Paint measures largest element render time.',
       'interactive': 'Time to Interactive measures when the page is fully interactive.',
       'total-blocking-time': 'Total Blocking Time sums up main thread blocking.',
       'cumulative-layout-shift': 'Cumulative Layout Shift measures visual stability.',
+      // Accessibility descriptions
+      'image-alt': 'Images must have alternate text for screen readers.',
+      'aria-allowed-attr': 'ARIA attributes must conform to valid usage.',
+      'aria-hidden-body': 'Body element must not have aria-hidden="true".',
+      'aria-required-attr': 'Required ARIA attributes must be provided.',
+      'accesskeys': 'Accesskey attributes should be unique and meaningful.',
+      'label': 'Form elements must have associated labels.',
+      'link-name': 'Links must have discernible text.',
+      'color-contrast': 'Text must have sufficient color contrast for readability.',
     };
 
-    for (const [auditId, audit] of Object.entries(report.audits || {})) {
-      if ((audit.score !== null && audit.score < 1) || audit.scoreDisplayMode === 'manual') {
+    const audits = report.audits || {};
+    for (const [auditId, audit] of Object.entries(audits)) {
+      if (
+        (audit.score !== null && audit.score < 0.9 && report.categories[category].auditRefs.some(ref => ref.id === auditId)) ||
+        audit.scoreDisplayMode === 'manual' ||
+        audit.scoreDisplayMode === 'notApplicable'
+      ) {
         issues.push({
-          type: audit.scoreDisplayMode === 'manual' ? 'alert' : 'error',
+          type: audit.scoreDisplayMode === 'manual' || audit.scoreDisplayMode === 'notApplicable' ? 'alert' : 'error',
           title: auditId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
           description: descriptions[auditId] || audit.description || 'Issue detected.',
-          suggestion: 'Review and optimize.',
+          suggestion: audit.details?.items?.length
+            ? `Review ${audit.details.items.length} specific instances: ${JSON.stringify(audit.details.items)}`
+            : 'Optimize based on audit recommendations.',
           score: audit.score,
           displayValue: audit.displayValue || 'N/A',
         });
       }
     }
+
+    // Add custom accessibility issues if present
+    if (category === 'accessibility' && report.customAccessibilityIssues) {
+      issues.push(...report.customAccessibilityIssues);
+    }
+
     return issues;
   }
 
@@ -244,6 +370,32 @@ class Scan {
         cumulativeLayoutShift: {
           value: audits['cumulative-layout-shift']?.numericValue || 0,
           displayValue: audits['cumulative-layout-shift']?.displayValue || safeDisplay(audits['cumulative-layout-shift']?.numericValue || 0, ''),
+        },
+      },
+    };
+  }
+
+  static extractAccessibilityMetrics(report) {
+    const accessibilityScore = Math.round(report.categories?.accessibility?.score * 100 || 0);
+    const audits = report.audits || {};
+    return {
+      accessibilityScore,
+      metrics: {
+        imageAltIssues: {
+          count: audits['image-alt']?.details?.items?.length || 0,
+          description: 'Number of images missing alt text.',
+        },
+        ariaIssues: {
+          count: (audits['aria-allowed-attr']?.details?.items?.length || 0) + (audits['aria-required-attr']?.details?.items?.length || 0),
+          description: 'Number of ARIA attribute issues.',
+        },
+        labelIssues: {
+          count: audits['label']?.details?.items?.length || 0,
+          description: 'Number of form elements missing labels.',
+        },
+        contrastIssues: {
+          count: audits['color-contrast']?.details?.items?.length || 0,
+          description: 'Number of elements with insufficient color contrast.',
         },
       },
     };
