@@ -276,7 +276,7 @@ class Scan {
     const audits = report.audits || {};
     for (const [auditId, audit] of Object.entries(audits)) {
       if (!criticalAudits[category].includes(auditId)) continue; // Only process critical audits
-      if (audit.score !== null && audit.score < 0.5) { // Stricter threshold for errors
+      if (audit.score !== null && audit.score < 0.2) { // Stricter threshold for errors
         issues.push({
           type: 'error',
           title: auditId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
