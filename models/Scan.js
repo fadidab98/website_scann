@@ -34,8 +34,8 @@ const scanConfig = {
     'heading-order',
     'tabindex'
   ],
-  errorScoreThreshold: 0.5, // Errors for scores < 0.5
-  alertScoreThreshold: 0.9, // Alerts for scores < 0.9 or manual checks
+  errorScoreThreshold: 0.7, // Errors for scores < 0.5
+  alertScoreThreshold: 0.95, // Alerts for scores < 0.9 or manual checks
   maxErrorsPerCategory: 3,
   maxAlertsPerCategory: 5,
   includeCustomChecks: true,
