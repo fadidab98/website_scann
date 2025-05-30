@@ -1,6 +1,6 @@
 class ScanView {
   static success(data) {
-    const { url, results, timestamp } = data;
+    const { url, results, timestamp, totalErrors, totalAlerts } = data;
     const { performance, accessibility } = results;
 
     return {
@@ -8,6 +8,8 @@ class ScanView {
       data: {
         url,
         timestamp,
+        totalErrors: totalErrors || 0,
+        totalAlerts: totalAlerts || 0,
         performance: {
           score: performance.metrics.performanceScore,
           errors: performance.errors.map(({ title, description, suggestion, displayValue, element }) => ({
@@ -24,6 +26,8 @@ class ScanView {
             score: score || 'N/A',
             element: element || 'N/A',
           })),
+          totalErrors: performance.totalErrors || 0,
+          totalAlerts: performance.totalAlerts || 0,
           metrics: {
             firstContentfulPaint: performance.metrics.metrics.firstContentfulPaint?.displayValue || '0 s',
             largestContentfulPaint: performance.metrics.metrics.largestContentfulPaint?.displayValue || '0 s',
@@ -49,6 +53,8 @@ class ScanView {
             score: score || 'N/A',
             element: element || 'N/A',
           })),
+          totalErrors: accessibility.totalErrors || 0,
+          totalAlerts: accessibility.totalAlerts || 0,
           metrics: {
             imageAltIssues: accessibility.metrics.metrics.imageAltIssues?.count || 0,
             labelIssues: accessibility.metrics.metrics.labelIssues?.count || 0,

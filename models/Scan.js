@@ -157,6 +157,8 @@ class Scan {
           metrics: accessibilityMetrics,
         },
       },
+      totalErrors: performanceIssues.filter(item => item.type === 'error').length + accessibilityIssues.filter(item => item.type === 'error').length,
+      totalAlerts: performanceIssues.filter(item => item.type === 'alert').length + accessibilityIssues.filter(item => item.type === 'alert').length,
       timestamp: Date.now(),
     };
 
@@ -247,7 +249,7 @@ class Scan {
         imgs.map(img => ({
           src: img.src,
           alt: img.getAttribute('alt'),
-          outerHTML: img.outerHTML,
+          outerHTML: img.outerHTML.length > 200 ? img.outerHTML.substring(0, 200) + '...' : img.outerHTML,
         }))
       );
       images.forEach(img => {
@@ -267,7 +269,7 @@ class Scan {
         anchors.map(a => ({
           href: a.href,
           text: a.textContent.trim(),
-          outerHTML: a.outerHTML,
+          outerHTML: a.outerHTML.length > 200 ? a.outerHTML.substring(0, 200) + '...' : a.outerHTML,
         }))
       );
       links.forEach(link => {
@@ -316,7 +318,10 @@ class Scan {
     for (const [auditId, audit] of Object.entries(audits)) {
       if (!criticalAudits.includes(auditId)) continue;
       console.log(`Processing ${category} audit: ${auditId}, score: ${audit.score}, mode: ${audit.scoreDisplayMode}, details: ${JSON.stringify(audit.details?.items || [])}`);
-      const elementDetails = audit.details?.items?.map(item => item.node?.snippet || item.selector || 'N/A')?.join('; ') || 'N/A';
+      const elementDetails = audit.details?.items?.map(item => {
+        const snippet = item.node?.snippet || item.selector || 'N/A';
+        return snippet.length > 200 ? snippet.substring(0, 200) + '...' : snippet;
+      })?.join('; ') || 'N/A';
       if (audit.score !== null && audit.score < config.errorScoreThreshold && audit.scoreDisplayMode !== 'manual') {
         issues.push({
           type: 'error',
