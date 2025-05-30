@@ -3,7 +3,7 @@ const ScanView = require('../views/ScanView');
 
 class ScanController {
   static async scan(req, res) {
-    let { url } = req.body;
+    let { url, audits } = req.body;
 
     if (!url) {
       return res.status(400).json(ScanView.error('Invalid URL'));
@@ -20,7 +20,7 @@ class ScanController {
     console.log(`Controller: Received scan request for ${url}`);
 
     try {
-      const result = await Scan.scanUrl(url);
+      const result = await Scan.scanUrl(url, audits || {});
       res.json(ScanView.success(result));
     } catch (error) {
       console.error(`Controller: Scan failed for ${url}:`, error);
